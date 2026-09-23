@@ -170,6 +170,7 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { LayoutPresetsSettings } from "./LayoutPresetsSettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
@@ -1438,6 +1439,8 @@ export function AppearanceSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <LayoutPresetsSettings />
 
       <TypographySection />
     </SettingsPageContainer>

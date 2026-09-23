@@ -84,7 +84,7 @@ interface LocalStorageChangeDetail {
   key: string;
 }
 
-function dispatchLocalStorageChange(key: string) {
+export function dispatchLocalStorageChange(key: string) {
   if (typeof window === "undefined") return;
   try {
     window.dispatchEvent(
@@ -95,6 +95,17 @@ function dispatchLocalStorageChange(key: string) {
   } catch (cause) {
     throw new LocalStorageOperationError({ operation: "notify", storageKey: key, cause });
   }
+}
+
+/** Calls `onChange` when `key` is written through this module in this window. */
+export function subscribeToLocalStorageKey(key: string, onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handleLocalChange = (event: CustomEvent<LocalStorageChangeDetail>) => {
+    if (event.detail.key === key) onChange();
+  };
+  window.addEventListener(LOCAL_STORAGE_CHANGE_EVENT, handleLocalChange as EventListener);
+  return () =>
+    window.removeEventListener(LOCAL_STORAGE_CHANGE_EVENT, handleLocalChange as EventListener);
 }
 
 export function useLocalStorage<T, E>(

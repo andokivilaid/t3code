@@ -181,6 +181,21 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
+  applyLayoutPresetAtIndex,
+  layoutApplyIndexFromCommand,
+  layoutSurfaceKind,
+  readLayoutWidth,
+  registerLayoutController,
+  selectDefaultLayoutPreset,
+  snapshotRightPanel,
+  useLayoutPresetStore,
+  writeLayoutWidth,
+  type LayoutSnapshot,
+  type LayoutSurfaceKind,
+} from "../layoutPresets";
+import { THREAD_SIDEBAR_WIDTH_STORAGE_KEY } from "./threadSidebarWidth";
+import { useSidebar } from "./ui/sidebar";
+import {
   pullRequestSurface,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
@@ -622,6 +637,8 @@ const DevicePanel = lazy(() =>
 );
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
+/** Threads that already had their one chance at the default layout this session. */
+const defaultLayoutAppliedThreadKeys = new Set<string>();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
   "textarea",
@@ -4885,34 +4902,50 @@ export default function ChatView(props: ChatViewProps) {
     createBrowserSurface,
     previewPanelOpen,
   ]);
+  /** Opens a new terminal tab, optionally already split in two. */
+  const openTerminalGroup = useCallback(
+    (split: "horizontal" | "vertical" | null) => {
+      if (!activeThreadRef || !activeThreadId || !activeProject) return false;
+      const cwd = gitCwd ?? activeProject.workspaceRoot;
+      const firstTerminalId = nextTerminalId(allocatableActiveTerminalIds);
+      const terminalIds = split
+        ? [firstTerminalId, nextTerminalId([...allocatableActiveTerminalIds, firstTerminalId])]
+        : [firstTerminalId];
+      const store = useRightPanelStore.getState();
+      store.openTerminal(activeThreadRef, firstTerminalId);
+      if (split) {
+        store.splitTerminal(activeThreadRef, `terminal:${firstTerminalId}`, terminalIds[1]!, split);
+      }
+      for (const terminalId of terminalIds) {
+        void openTerminal({
+          environmentId: activeThreadRef.environmentId,
+          input: {
+            threadId: activeThreadId,
+            terminalId,
+            cwd,
+            ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
+            env: projectScriptRuntimeEnv({
+              project: { cwd: activeProject.workspaceRoot },
+              worktreePath: activeThreadWorktreePath,
+            }),
+          },
+        });
+      }
+      return true;
+    },
+    [
+      activeProject,
+      activeThreadId,
+      activeThreadRef,
+      activeThreadWorktreePath,
+      allocatableActiveTerminalIds,
+      gitCwd,
+      openTerminal,
+    ],
+  );
   const addTerminalSurface = useCallback(() => {
-    if (!activeThreadRef || !activeThreadId || !activeProject) return;
-    const cwd = gitCwd ?? activeProject.workspaceRoot;
-    const terminalId = nextTerminalId(allocatableActiveTerminalIds);
-    useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId);
-    setTerminalFocusRequestId((value) => value + 1);
-    void openTerminal({
-      environmentId: activeThreadRef.environmentId,
-      input: {
-        threadId: activeThreadId,
-        terminalId,
-        cwd,
-        ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
-        env: projectScriptRuntimeEnv({
-          project: { cwd: activeProject.workspaceRoot },
-          worktreePath: activeThreadWorktreePath,
-        }),
-      },
-    });
-  }, [
-    activeProject,
-    activeThreadId,
-    activeThreadRef,
-    activeThreadWorktreePath,
-    allocatableActiveTerminalIds,
-    gitCwd,
-    openTerminal,
-  ]);
+    if (openTerminalGroup(null)) setTerminalFocusRequestId((value) => value + 1);
+  }, [openTerminalGroup]);
   const splitPanelTerminal = useCallback(
     (direction: "horizontal" | "vertical" = "horizontal") => {
       if (
@@ -5031,6 +5064,134 @@ export default function ChatView(props: ChatViewProps) {
       threadKey === routeThreadKey ? null : routeThreadKey,
     );
   }, [canMaximizeRightPanel, routeThreadKey]);
+  const rightPanelWidthStorageKey = activeThreadKey
+    ? `t3code:preview-panel-width:${activeThreadKey}`
+    : null;
+  const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: sidebarIsMobile } = useSidebar();
+  const captureLayout = useCallback(
+    (): LayoutSnapshot => ({
+      ...snapshotRightPanel(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, activeThreadRef),
+      ),
+      rightPanelMaximized,
+      rightPanelWidth: rightPanelWidthStorageKey
+        ? readLayoutWidth(rightPanelWidthStorageKey)
+        : null,
+      sidebarOpen,
+      sidebarWidth: readLayoutWidth(THREAD_SIDEBAR_WIDTH_STORAGE_KEY),
+      terminalDrawerOpen: terminalUiState.terminalOpen,
+    }),
+    [
+      activeThreadRef,
+      rightPanelMaximized,
+      rightPanelWidthStorageKey,
+      sidebarOpen,
+      terminalUiState.terminalOpen,
+    ],
+  );
+  // Adds the preset's missing tab kinds but never closes existing tabs, so
+  // applying a layout cannot kill a running terminal or browser session.
+  const applyThreadLayout = useCallback(
+    (layout: LayoutSnapshot) => {
+      if (!activeThreadRef) return;
+      const store = useRightPanelStore.getState();
+      const readState = () =>
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, activeThreadRef);
+      const findKind = (kind: LayoutSurfaceKind) =>
+        readState().surfaces.find((surface) => layoutSurfaceKind(surface) === kind);
+      for (const kind of layout.surfaceKinds) {
+        if (findKind(kind)) continue;
+        switch (kind) {
+          case "terminal":
+            openTerminalGroup(layout.terminalSplit);
+            break;
+          case "diff":
+            addDiffSurface();
+            break;
+          case "files":
+            addFilesSurface();
+            break;
+          case "preview":
+            if (isPreviewSupportedInRuntime()) store.open(activeThreadRef, "preview");
+            break;
+          case "device":
+            // Skip rather than interrupt with the device setup dialog.
+            if (deviceState.onboardingCompleted && deviceState.hostStatus !== "disabled") {
+              store.open(activeThreadRef, "device");
+            }
+            break;
+          case "pull-requests":
+            addPullRequestsSurface();
+            break;
+          case "agents":
+            addAgentsSurface();
+            break;
+        }
+      }
+      const active = layout.activeKind === null ? undefined : findKind(layout.activeKind);
+      if (active) store.activateSurface(activeThreadRef, active.id);
+      const panelState = readState();
+      if (layout.rightPanelOpen && panelState.surfaces.length > 0) {
+        if (!panelState.isOpen) store.show(activeThreadRef);
+      } else if (panelState.isOpen) {
+        store.close(activeThreadRef);
+      }
+      setMaximizedRightPanelThreadKey(
+        layout.rightPanelOpen && layout.rightPanelMaximized ? routeThreadKey : null,
+      );
+      if (rightPanelWidthStorageKey && layout.rightPanelWidth !== null) {
+        writeLayoutWidth(rightPanelWidthStorageKey, layout.rightPanelWidth);
+      }
+      if (layout.terminalDrawerOpen !== terminalUiState.terminalOpen) {
+        if (layout.terminalDrawerOpen) toggleTerminalVisibility();
+        else setTerminalOpen(false);
+      }
+    },
+    [
+      activeThreadRef,
+      addAgentsSurface,
+      addDiffSurface,
+      addFilesSurface,
+      addPullRequestsSurface,
+      deviceState.hostStatus,
+      deviceState.onboardingCompleted,
+      openTerminalGroup,
+      rightPanelWidthStorageKey,
+      routeThreadKey,
+      setTerminalOpen,
+      terminalUiState.terminalOpen,
+      toggleTerminalVisibility,
+    ],
+  );
+  useEffect(
+    () =>
+      registerLayoutController({
+        capture: captureLayout,
+        apply: (layout) => {
+          // The mobile sidebar is a sheet; opening it would cover the layout.
+          if (!sidebarIsMobile) {
+            setSidebarOpen(layout.sidebarOpen);
+            if (layout.sidebarWidth !== null) {
+              writeLayoutWidth(THREAD_SIDEBAR_WIDTH_STORAGE_KEY, layout.sidebarWidth);
+            }
+          }
+          applyThreadLayout(layout);
+        },
+      }),
+    [applyThreadLayout, captureLayout, setSidebarOpen, sidebarIsMobile],
+  );
+  // New threads open with the default layout. The sidebar is app-wide, so
+  // only the thread's own panes follow it. Threads with messages keep
+  // whatever the user left them with, including an empty panel.
+  const defaultLayoutPreset = useLayoutPresetStore(selectDefaultLayoutPreset);
+  const activeThreadIsEmpty = (activeThread?.messages.length ?? 0) === 0;
+  useEffect(() => {
+    if (!activeThreadKey || !activeProject || !defaultLayoutPreset || !activeThreadIsEmpty) return;
+    if (defaultLayoutAppliedThreadKeys.has(activeThreadKey)) return;
+    defaultLayoutAppliedThreadKeys.add(activeThreadKey);
+    if (useRightPanelStore.getState().byThreadKey[activeThreadKey]) return;
+    applyThreadLayout(defaultLayoutPreset);
+  }, [activeProject, activeThreadIsEmpty, activeThreadKey, applyThreadLayout, defaultLayoutPreset]);
   const cleanupRightPanelSurfaces = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
@@ -6772,6 +6933,15 @@ export default function ChatView(props: ChatViewProps) {
         event.preventDefault();
         event.stopPropagation();
         toggleRightPanel();
+        return;
+      }
+
+      const layoutPresetIndex = layoutApplyIndexFromCommand(command);
+      if (layoutPresetIndex !== null) {
+        // An unbound slot keeps the key's native meaning.
+        if (!applyLayoutPresetAtIndex(layoutPresetIndex)) return;
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
 
@@ -10331,7 +10501,7 @@ export default function ChatView(props: ChatViewProps) {
       {rightPanelPresent && !shouldUseRightPanelSheet && activeThreadRef ? (
         <RightPanelTabs
           mode="inline"
-          widthStorageKey={`t3code:preview-panel-width:${activeThreadKey}`}
+          {...(rightPanelWidthStorageKey ? { widthStorageKey: rightPanelWidthStorageKey } : {})}
           open={rightPanelOpen}
           maximized={rightPanelMaximized}
           surfaces={renderedRightPanelSurfaces}
