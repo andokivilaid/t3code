@@ -35,6 +35,7 @@ import {
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
+  LAYOUT_APPLY_KEYBINDING_COMMANDS,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -47,6 +48,7 @@ import {
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
+  LayoutDashboardIcon,
   LinkIcon,
   MessageSquareIcon,
   MonitorIcon,
@@ -183,6 +185,7 @@ import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/com
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { describeLayout, getLayoutController, useLayoutPresetStore } from "../layoutPresets";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
@@ -1734,6 +1737,7 @@ function OpenCommandPaletteDialog(props: {
     pushPaletteView,
   ]);
 
+  const layoutPresets = useLayoutPresetStore((state) => state.presets);
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
   if (projects.length > 0) {
@@ -2026,6 +2030,76 @@ function OpenCommandPaletteDialog(props: {
     run: async () => {
       await navigate({ to: "/usage" });
     },
+  });
+
+  // Layouts need the chat view that owns the panes; elsewhere they only link to settings.
+  const layoutController = getLayoutController();
+  actionItems.push({
+    kind: "submenu",
+    value: "action:layouts",
+    searchTerms: ["layout", "preset", "panes", "panels", "workspace", "arrange"],
+    title: "Layouts",
+    icon: <LayoutDashboardIcon className={ITEM_ICON_CLASS} />,
+    addonIcon: <LayoutDashboardIcon className={ADDON_ICON_CLASS} />,
+    groups: [
+      ...(layoutPresets.length > 0
+        ? [
+            {
+              value: "layout-presets",
+              label: "Apply layout",
+              items: layoutPresets.map((preset, index): CommandPaletteActionItem => ({
+                kind: "action",
+                value: `layout:apply:${preset.id}`,
+                searchTerms: [preset.name, "layout", "apply"],
+                title: preset.name,
+                description: describeLayout(preset),
+                disabled: layoutController === null,
+                icon: <LayoutDashboardIcon className={ITEM_ICON_CLASS} />,
+                ...(index < LAYOUT_APPLY_KEYBINDING_COMMANDS.length
+                  ? { shortcutCommand: LAYOUT_APPLY_KEYBINDING_COMMANDS[index] }
+                  : {}),
+                run: async () => {
+                  getLayoutController()?.apply(preset);
+                },
+              })),
+            },
+          ]
+        : []),
+      {
+        value: "layout-manage",
+        label: "Manage",
+        items: [
+          {
+            kind: "action",
+            value: "layout:save",
+            searchTerms: ["save", "current", "layout", "new"],
+            title: "Save current layout",
+            disabled: layoutController === null,
+            icon: <LayoutDashboardIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              const controller = getLayoutController();
+              if (!controller) return;
+              const preset = useLayoutPresetStore.getState().save(controller.capture());
+              toastManager.add({
+                type: "success",
+                title: `Saved “${preset.name}”`,
+                description: "Rename it or make it the default in Settings → Appearance.",
+              });
+            },
+          },
+          {
+            kind: "action",
+            value: "layout:settings",
+            searchTerms: ["manage", "rename", "delete", "default", "layout"],
+            title: "Manage layouts",
+            icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              await navigate({ to: "/settings/appearance", hash: "layouts" });
+            },
+          },
+        ],
+      },
+    ],
   });
 
   actionItems.push({

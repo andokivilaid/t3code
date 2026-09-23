@@ -2,12 +2,17 @@ import * as Schema from "effect/Schema";
 import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
 
-import { getLocalStorageItem, setLocalStorageItem } from "./useLocalStorage";
+import {
+  getLocalStorageItem,
+  setLocalStorageItem,
+  subscribeToLocalStorageKey,
+} from "./useLocalStorage";
 import { useResizeDrag } from "./useResizeDrag";
 
 const WidthSchema = Schema.Finite;
@@ -36,7 +41,8 @@ export interface ResizableWidthHandlers {
 
 /**
  * Width state for a side-anchored panel resized via a drag handle on the
- * specified edge. Width is read on mount or storage-key changes and persisted on
+ * specified edge. Width is read on mount, storage-key changes, or same-window
+ * writes announced through `dispatchLocalStorageChange`, and persisted on
  * drag-end (not on every rAF tick — would otherwise be ~60 writes/sec).
  *
  * The hook updates an internal `width` state during drag (so the panel
@@ -73,6 +79,20 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
   if (widthState.storageKey !== storageKey) {
     setWidthState({ storageKey, width: readWidth() });
   }
+
+  // Layout presets rewrite the stored width while the panel is mounted.
+  useEffect(
+    () =>
+      subscribeToLocalStorageKey(storageKey, () => {
+        try {
+          const stored = getLocalStorageItem(storageKey, WidthSchema);
+          if (stored !== null) setWidthState({ storageKey, width: stored });
+        } catch (error) {
+          console.error("Could not read persisted panel width.", error);
+        }
+      }),
+    [storageKey],
+  );
 
   const clampedWidth = clamp(widthState.width);
   const latestOptions = useRef({ clamp, storageKey });

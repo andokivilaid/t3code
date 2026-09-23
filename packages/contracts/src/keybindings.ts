@@ -34,6 +34,19 @@ export const MODEL_PICKER_JUMP_KEYBINDING_COMMANDS = [
 export type ModelPickerJumpKeybindingCommand =
   (typeof MODEL_PICKER_JUMP_KEYBINDING_COMMANDS)[number];
 
+export const LAYOUT_APPLY_KEYBINDING_COMMANDS = [
+  "layout.apply.1",
+  "layout.apply.2",
+  "layout.apply.3",
+  "layout.apply.4",
+  "layout.apply.5",
+  "layout.apply.6",
+  "layout.apply.7",
+  "layout.apply.8",
+  "layout.apply.9",
+] as const;
+export type LayoutApplyKeybindingCommand = (typeof LAYOUT_APPLY_KEYBINDING_COMMANDS)[number];
+
 const THREAD_KEYBINDING_COMMANDS = [
   "thread.stop",
   "thread.steerQueuedMessage",
@@ -93,6 +106,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "editor.openFavorite",
   ...MODEL_PICKER_KEYBINDING_COMMANDS,
   ...THREAD_KEYBINDING_COMMANDS,
+  ...LAYOUT_APPLY_KEYBINDING_COMMANDS,
 ] as const;
 
 export const SCRIPT_RUN_COMMAND_PATTERN = Schema.TemplateLiteral([
