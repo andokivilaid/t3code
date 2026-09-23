@@ -18,6 +18,7 @@ Prefer a container? See [Dev container](../internals/devcontainer.md) for VS Cod
 ## Choosing a dev process
 
 Use `vp run dev` for server and web, or `vp run dev:desktop` for the Electron client.
+Set `T3CODE_DESKTOP_OPEN_DEVTOOLS=1` to open detached DevTools when the desktop window launches.
 `dev:server` and `dev:web` start those processes separately.
 See the [mobile README](../../apps/mobile/README.md) for native builds and Metro.
 
